@@ -1,22 +1,3 @@
-"""
-=============================================================================
-telkom_inference.py  –  Inference on Real Test Dataset
-=============================================================================
-Memuat model BiLSTM-Attention yang sudah disimpan, lalu menjalankan:
-  1. Parsing & preprocessing Test.csv (Telkom Univ. schema)
-  2. Wavelet Denoising
-  3. BiLSTM displacement inference
-  4. GPS-corrected Kalman Filter fusion
-  5. Trajectory plot 300 DPI (journal style)
-
-Usage:
-    python3 telkom_inference.py
-
-Requirements (sama dengan pipeline utama):
-    pip install PyWavelets torch filterpy scikit-learn pandas matplotlib scipy
-=============================================================================
-"""
-
 import os, json, pickle, warnings
 warnings.filterwarnings("ignore")
 
@@ -33,7 +14,6 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import AutoMinorLocator
 
-# ─────────────────────────────────────────────────────────
 SEED = 42
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -46,9 +26,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 SEP = "─" * 66
 
-# ═══════════════════════════════════════════════════════════
 # STEP 1 — LOAD SAVED MODEL & CONFIG
-# ═══════════════════════════════════════════════════════════
 print(SEP)
 print("  TELKOM UNIVERSITY  –  BiLSTM+KF INFERENCE ON TEST.CSV")
 print(SEP)
@@ -129,9 +107,8 @@ print(f"  ✓ Model loaded  (hidden={HP['hidden']}, layers={HP['layers']}, "
 print(f"  ✓ Best val loss from training: {ckpt['best_val_loss']:.6f}")
 print(f"  ✓ EKF params  q={EKF_PARAMS['q_pos']:.2e}  r={EKF_PARAMS['r_gps']:.2e}")
 
-# ═══════════════════════════════════════════════════════════
 # STEP 2 — PARSE TEST.CSV  (Telkom Univ. real sensor format)
-# ═══════════════════════════════════════════════════════════
+
 print("\n[2/6] Parsing Test.csv…")
 
 raw = pd.read_csv(TEST_CSV, skiprows=1, header=None)
@@ -189,9 +166,7 @@ print(f"  GPS area         : lat [{df_gps_valid['lat'].min():.4f}, "
       f"{df_gps_valid['lat'].max():.4f}]  "
       f"lon [{df_gps_valid['lon'].min():.4f}, {df_gps_valid['lon'].max():.4f}]")
 
-# ═══════════════════════════════════════════════════════════
 # STEP 3 — WAVELET DENOISING
-# ═══════════════════════════════════════════════════════════
 print("\n[3/6] Wavelet denoising (db4 level-5)…")
 
 def wavelet_denoise(sig, wavelet="db4", level=5, mode="soft"):
@@ -207,9 +182,7 @@ for col in FEAT_COLS:
 
 print(f"  ✓ Denoised: {FEAT_COLS}")
 
-# ═══════════════════════════════════════════════════════════
 # STEP 4 — BiLSTM INFERENCE  (predict Δlat, Δlon)
-# ═══════════════════════════════════════════════════════════
 print("\n[4/6] Running BiLSTM displacement inference…")
 
 X_raw = df_imu[FEAT_COLS].values.astype(np.float32)
@@ -249,9 +222,7 @@ for i in range(1, len(preds_delta)):
     lat_bl[i] = lat_bl[i-1] + preds_delta[i, 0]
     lon_bl[i] = lon_bl[i-1] + preds_delta[i, 1]
 
-# ═══════════════════════════════════════════════════════════
 # STEP 5 — GPS-CORRECTED KALMAN FILTER
-# ═══════════════════════════════════════════════════════════
 print("\n[5/6] Running GPS-corrected Kalman Filter…")
 
 q_pos = EKF_PARAMS["q_pos"]
@@ -307,9 +278,7 @@ for i in range(len(preds_delta)):
 n_gps_updates = gps_used_mask.sum()
 print(f"  ✓ KF finished  |  GPS updates applied: {n_gps_updates:,} times")
 
-# ═══════════════════════════════════════════════════════════
 # DEAD RECKONING BASELINE (for comparison)
-# ═══════════════════════════════════════════════════════════
 # Estimate dt from time column (irregular sampling)
 times_full = df_imu["time_s"].values
 dt_arr     = np.diff(times_full, prepend=times_full[0])
@@ -327,9 +296,7 @@ lon_dr_full = lon_start + np.cumsum(vx_dr) / MPERS_LON
 lat_dr = lat_dr_full[IDX_START: IDX_START + len(preds_delta)]
 lon_dr = lon_dr_full[IDX_START: IDX_START + len(preds_delta)]
 
-# ═══════════════════════════════════════════════════════════
 # METRICS vs GPS ground reference
-# ═══════════════════════════════════════════════════════════
 def haversine_m(lat1, lon1, lat2, lon2):
     R  = 6_371_000.0
     φ1 = np.radians(lat1); φ2 = np.radians(lat2)
@@ -371,9 +338,7 @@ target_ok = "✓ TARGET MET (<10 m)" if S_ekf["rmse"] < 10 else "⚠ Above 10 m 
 print(f"\n  {target_ok}   |   Improvement vs DR: {improv:.1f}%")
 print(f"{'='*66}\n")
 
-# ═══════════════════════════════════════════════════════════
 # STEP 6 — JOURNAL-STYLE PLOT  (300 DPI)
-# ═══════════════════════════════════════════════════════════
 print("[6/6] Generating journal-style plot…")
 
 JSTYLE = {
