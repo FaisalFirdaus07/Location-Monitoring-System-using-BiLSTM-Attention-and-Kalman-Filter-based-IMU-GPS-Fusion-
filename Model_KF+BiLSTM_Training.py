@@ -1,23 +1,3 @@
-"""
-=============================================================================
-Telkom University IMU Pipeline  –  v2 REVISED
-DOI: 10.34820/FK2/RUYZJT
-=============================================================================
-Root-cause fixes:
-  [FIX-1] BiLSTM predicts Δlat/Δlon (displacement), not absolute coords
-           → eliminates data leakage & scale mismatch
-  [FIX-2] EKF redesign:
-           · Prediction step  → BiLSTM displacement as control input (u)
-           · Measurement step → real GPS 1-Hz fixes for absolute correction
-           · Predict-only when GPS absent; update whenever GPS arrives
-  [FIX-3] Dual Bayesian Optimisation (Optuna):
-           · Stage A: BiLSTM architecture hyperparameters
-           · Stage B: EKF Q (process noise) & R (GPS noise) calibration
-
-Target: RMSE < 10 m
-=============================================================================
-"""
-
 import os, warnings
 warnings.filterwarnings("ignore")
 
@@ -40,7 +20,6 @@ from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 
-# ─────────────────────────────────────────────────────────
 SEED = 42
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -48,9 +27,7 @@ DEVICE = torch.device("cpu")
 
 SEP = "─" * 66
 
-# ═══════════════════════════════════════════════════════════
 # 1.  SYNTHETIC DATASET  (Telkom Univ. schema)
-# ═══════════════════════════════════════════════════════════
 print(SEP)
 print("  TELKOM UNIVERSITY IMU PIPELINE v2  |  DOI: 10.34820/FK2/RUYZJT")
 print(SEP)
@@ -78,7 +55,7 @@ def gt_trajectory(t):
 
 lat_gt, lon_gt = gt_trajectory(t_imu)
 
-# ── Physics-derived IMU signals ──────────────────────────────────────────
+#  Physics-derived IMU signals
 MPERS_PER_DEG_LAT = 111_320
 MPERS_PER_DEG_LON = 111_320 * np.cos(np.radians(LAT0))
 
@@ -103,15 +80,13 @@ gyr_x = rng.normal(0, 0.01, N_IMU)
 gyr_y = rng.normal(0, 0.01, N_IMU)
 gyr_z = gyro_z_true + rng.normal(0, 0.01, N_IMU) + drift_gyr
 
-# ── GPS  (1 Hz, ~5 m horizontal noise) ──────────────────────────────────
+# ── GPS  (1 Hz, ~5 m horizontal noise)
 GPS_NOISE_DEG = 5e-5          # ≈ 5.6 m per axis
 lat_gps_raw, lon_gps_raw = gt_trajectory(t_gps)
 lat_gps_1hz = lat_gps_raw + rng.normal(0, GPS_NOISE_DEG, N_GPS)
 lon_gps_1hz = lon_gps_raw + rng.normal(0, GPS_NOISE_DEG, N_GPS)
 
-# ═══════════════════════════════════════════════════════════
 # 2.  TIMESTAMP SYNCHRONISATION & MERGE
-# ═══════════════════════════════════════════════════════════
 print("[2/8] Timestamp synchronization & sensor merge…")
 
 ts_imu_ns = (t_imu * 1e9).astype(np.int64)
@@ -132,9 +107,7 @@ df["lon_gt"] = lon_gt
 df.reset_index(drop=True, inplace=True)
 print(f"    Merged: {len(df):,} rows × {df.shape[1]} cols")
 
-# ═══════════════════════════════════════════════════════════
 # 3.  WAVELET DENOISING  (db4, level-5, BayesShrink)
-# ═══════════════════════════════════════════════════════════
 print("[3/8] Wavelet Denoising on inertial sensors…")
 
 def wavelet_denoise(sig, wavelet="db4", level=5, mode="soft"):
@@ -157,10 +130,8 @@ for col in imu_cols:
 avg_snr = np.mean(list(snr_before.values()))
 print(f"    Average SNR improvement: {avg_snr:.1f} dB")
 
-# ═══════════════════════════════════════════════════════════
 # 4.  FIX-1: DISPLACEMENT TARGET  (Δlat, Δlon per step)
 #     – replaces absolute coord regression; no data leakage
-# ═══════════════════════════════════════════════════════════
 print("[4/8] Building displacement (Δlat, Δlon) prediction targets…")
 
 # Per-step displacement in degrees (tiny values, well-conditioned for scaler)
@@ -197,9 +168,7 @@ ds_tr  = TensorDataset(torch.from_numpy(X_tr),  torch.from_numpy(y_tr))
 ds_val = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
 print(f"    Train seqs: {len(X_tr):,} | Val seqs: {len(X_val):,}")
 
-# ═══════════════════════════════════════════════════════════
 # 5.  BiLSTM + SELF-ATTENTION MODEL
-# ═══════════════════════════════════════════════════════════
 class ScaledDotAttention(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
@@ -256,9 +225,7 @@ def run_epoch(model, loader, optimizer, crit, train=True):
     return total / max(len(loader), 1)
 
 
-# ═══════════════════════════════════════════════════════════
 # 6.  STAGE-A OPTUNA: BiLSTM hyperparameters
-# ═══════════════════════════════════════════════════════════
 print("[5/8] Stage-A Bayesian Opt — BiLSTM hyperparameters (Optuna)…")
 
 def bilstm_objective(trial):
@@ -291,7 +258,7 @@ study_a.optimize(bilstm_objective, n_trials=5)
 hp_best = study_a.best_params
 print(f"    Best HP: {hp_best}")
 
-# ── Train final BiLSTM ────────────────────────────────────────────────────
+# ── Train final BiLSTM
 print("[6/8] Training final BiLSTM-Attention model…")
 
 BATCH = hp_best["bs"]
@@ -319,9 +286,7 @@ for ep in range(30):
 model.load_state_dict(best_wts)
 print(f"    Final best val loss: {best_val:.6f}")
 
-# ═══════════════════════════════════════════════════════════
 # SAVE MODEL  –  checkpoint lengkap untuk di-load ulang
-# ═══════════════════════════════════════════════════════════
 import json, pickle
 
 MODEL_DIR = "/mnt/user-data/outputs/saved_model"
@@ -404,14 +369,14 @@ for i in range(1, len(preds_delta)):
     lat_bl[i] = lat_bl[i-1] + preds_delta[i, 0]
     lon_bl[i] = lon_bl[i-1] + preds_delta[i, 1]
 
-# ═══════════════════════════════════════════════════════════
+
 # 7.  FIX-2 & FIX-3: Redesigned KalmanFilter + Stage-B Optuna
 #
 #   State  x  = [lat, lon]                    (2D position)
 #   Predict    x_{k+1} = x_k + u_k            (u = BiLSTM Δ)
 #   Update     z_k = [lat_gps, lon_gps]       (only when GPS fires)
 #   F = I₂,  B = I₂,  H = I₂
-# ═══════════════════════════════════════════════════════════
+
 print("[7/8] Stage-B Bayesian Opt — EKF Q & R calibration (Optuna)…")
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -478,10 +443,10 @@ print(f"    Best EKF params: q_pos={ekf_best['q_pos']:.3e}  "
       f"r_gps={ekf_best['r_gps']:.3e}")
 print(f"    Best EKF RMSE from Optuna: {study_b.best_value:.3f} m")
 
-# ── Final EKF run ─────────────────────────────────────────────────────────
+# ── Final EKF run 
 lat_ekf, lon_ekf = run_kf(ekf_best["q_pos"], ekf_best["r_gps"])
 
-# ── Update checkpoint with EKF params ────────────────────────────────────
+# ── Update checkpoint with EKF params
 ckpt_path = os.path.join(MODEL_DIR, "bilstm_checkpoint.pth")
 ckpt = torch.load(ckpt_path, weights_only=False)
 ckpt["ekf_params"] = ekf_best
@@ -494,9 +459,8 @@ with open(cfg_path, "w") as f:
     json.dump(cfg, f, indent=2)
 print(f"    Checkpoint updated with EKF params → {ckpt_path}")
 
-# ═══════════════════════════════════════════════════════════
+
 # 8.  BASELINES: Dead Reckoning & GPS-only
-# ═══════════════════════════════════════════════════════════
 # Dead Reckoning (double-integration, no GPS)
 heading_dr = np.cumsum(df["gz"].values) * dt
 vx_dr = np.cumsum(df["ax"].values * np.cos(heading_dr)) * dt
@@ -510,7 +474,7 @@ lon_dr = lon_dr_full[IDX_START:IDX_END]
 lat_gps_up = df["lat_gps_up"].values[IDX_START:IDX_END]
 lon_gps_up = df["lon_gps_up"].values[IDX_START:IDX_END]
 
-# ── Error metrics for all methods ─────────────────────────────────────────
+# ── Error metrics for all methods
 err_dr     = haversine_m(lat_gt_a, lon_gt_a, lat_dr,     lon_dr)
 err_gps    = haversine_m(lat_gt_a, lon_gt_a, lat_gps_up, lon_gps_up)
 err_bl     = haversine_m(lat_gt_a, lon_gt_a, lat_bl,     lon_bl)
@@ -535,9 +499,9 @@ target = "✓ TARGET MET (<10 m)" if S_ekf["rmse"] < 10 else "✗ Target not met
 print(f"  {target}")
 print(f"{'='*66}\n")
 
-# ═══════════════════════════════════════════════════════════
+
 # 9.  JOURNAL-STYLE PLOT  (300 DPI, serif)
-# ═══════════════════════════════════════════════════════════
+
 print("[8/8] Generating journal-quality trajectory plot…")
 
 JSTYLE = {
